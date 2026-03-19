@@ -21,3 +21,17 @@ class AskResponse(BaseModel):
 class HealthCheck(BaseModel):
     status: Literal["ok"]
     service: str
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=4000)
+
+class ChatRequest(BaseModel):
+    messages: List[ChatMessage] = Field(..., min_length=1)
+    top_k: Optional[int] = Field(None, ge=1, le=10)
+
+class ChatResponse(BaseModel):
+    answer: str
+    grounded: bool
+    reason: Optional[str] = None
+    citations: list = Field(default_factory=list)

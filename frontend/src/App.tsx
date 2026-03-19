@@ -1,6 +1,11 @@
-import { useState } from 'react'
-import './App.css'
+import { useState, useEffect, useRef } from "react";
+import "./App.css";
 
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+  ts: number;
+};
 
 type Citation = {
   title?: string | null;
@@ -10,115 +15,200 @@ type Citation = {
   score?: number | null;
 };
 
-type AskResponse = {
+type ChatResponse = {
   answer: string;
   grounded: boolean;
   reason?: string | null;
   citations: Citation[];
 };
 
+function uid() {
+  return Math.random().toString(16).slice(2) + Date.now().toString(16);
+}
 
-function App() {
-  
-const [question, setQuestion] = useState("What does the data say about pneumonia?");
-  const [topK, setTopK] = useState<number>(5);
+export default function App() {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [topK, setTopK] = useState(5);
   const [loading, setLoading] = useState(false);
-  const [resp, setResp] = useState<AskResponse | null>(null);
+  const [lastCitations, setLastCitations] = useState<Citation[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const API_BASE = import.meta.env.VITE_API_BASE;
+  const [hydrated, setHydrated] = useState(false);
+  const endRef = useRef<HTMLDivElement>(null);
 
-  async function ask() {
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("chat_history");
+      if (saved) setMessages(JSON.parse(saved));
+    } catch (e) {
+      console.warn("Failed to load chat_history:", e);
+    } finally {
+      setHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return; // ✅ prevents overwriting with []
+    localStorage.setItem("chat_history", JSON.stringify(messages));
+  }, [messages, hydrated]);
+
+  async function sendMessage() {
+    const text = input.trim();
+    if (!text) return;
+
+    const userMsg: ChatMessage = {
+      role: "user",
+      content: text,
+      ts: Date.now(),
+    };
+    const nextMessages = [...messages, userMsg];
+
+    setMessages(nextMessages);
+    setInput("");
     setLoading(true);
     setError(null);
-    setResp(null);
 
     try {
-      const r = await fetch(`${API_BASE}/ask`, {
+      const payload = {
+        messages: nextMessages.map(({ role, content }) => ({ role, content })),
+        top_k: topK,
+      };
+
+      const r = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, top_k: topK })
+        body: JSON.stringify(payload),
       });
 
-      const data = await r.json();
-      if (!r.ok) throw new Error(data?.detail ?? `HTTP ${r.status}`);
+      const data: ChatResponse = await r.json();
+      if (!r.ok) throw new Error((data as any)?.detail ?? `HTTP ${r.status}`);
 
-      setResp(data);
+      const assistantMsg: ChatMessage = {
+        role: "assistant",
+        content: data.answer,
+        ts: Date.now(),
+      };
+
+      setMessages([...nextMessages, assistantMsg]);
+      setLastCitations(data.citations || []);
     } catch (e: any) {
       setError(e?.message ?? "Unknown error");
+      setMessages([
+        ...nextMessages,
+        {
+          role: "assistant",
+          content: `Error: ${e?.message ?? "Unknown error"}`,
+          ts: Date.now(),
+        },
+      ]);
     } finally {
       setLoading(false);
     }
   }
-    
-return (
-    <div className="page">
-      <header className="header">
-        <h1>Healthcare RAG Assistant</h1>
-        <p>Local demo: React (Vite) + FastAPI RAG backend</p>
-      </header>
-
-      <section className="card">
-        <label className="label">Question</label>
-        <textarea
-          className="textarea"
-          rows={3}
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-        />
-
-        <div className="row">
-          <label className="labelInline">Top K</label>
-          <input
-            className="input"
-            type="number"
-            min={1}
-            max={10}
-            value={topK}
-            onChange={(e) => setTopK(Number(e.target.value))}
-          />
-
-          <button className="btn" onClick={ask} disabled={loading || question.trim().length < 3}>
-            {loading ? "Asking..." : "Ask"}
-          </button>
-
-          <a className="link" href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer">API Docs</a>
+  
+  return (
+    <div className="layout">
+      {/* Sidebar */}
+      <aside className="sidebar">
+        <div className="brand">
+          <span className="brandDot" />
+          <div className="brandText">
+            <div className="brandTitle">Healthcare Bot</div>
+            <div className="brandSub">Your personal health assistant</div>
+          </div>
         </div>
-        {error && <div className="error">Error: {error}</div>}
-      </section>
 
-      <section className="card">
-        <h2>Answer</h2>
-        {!resp && !error && <div className="muted">Ask a question to see results.</div>}
-        {resp && <pre className="answer">{resp.answer}</pre>}
-        {resp && !resp.grounded && resp.reason && <div className="muted">Reason: {resp.reason}</div>}
-      </section>
+        <button className="newChatBtn" onClick={() => {
+          setMessages([]);
+          setLastCitations([]);
+          localStorage.removeItem("chat_history");
+        }}>
+          + New chat
+        </button>
 
-      <section className="card">
-        <h2>Citations</h2>
-        {!resp?.citations?.length && <div className="muted">No citations yet.</div>}
-        {!!resp?.citations?.length && (
-          <ul className="citations">
-            {resp.citations.map((c, i) => (
-              <li key={i} className="citationItem">
-                <div>
-                  <strong>[{i + 1}]</strong>{" "}
-                  {c.path ? (
-                    <a className="link" href={c.path} target="_blank" rel="noreferrer">
-                      {c.title ?? "source"}
-                    </a>
-                  ) : (
-                    <span>{c.title ?? "source"}</span>
-                  )}
-                  {c.score != null && <span className="muted small"> — score: {c.score.toFixed(3)}</span>}
+        <div className="sidebarHint">
+          Messages are saved in <code>localStorage</code>.
+        </div>
+      </aside>
+
+      {/* Chat */}
+      <main className="chat">
+        <header className="chatHeader">
+          <div className="chatHeaderTitle">Conversation</div>
+          <div className="chatHeaderSub">Assistant left • You right</div>
+        </header>
+
+        <div className="messages">
+          {messages.map((m, i) => (
+            <div
+              key={i}
+              className={`msgRow ${m.role === "user" ? "right" : "left"}`}
+            >
+              {/* Avatar on the side */}
+              <div className={`avatar ${m.role}`}>
+                {m.role === "user" ? "You" : "AI"}
+              </div>
+
+              {/* Bubble area */}
+              <div className="msgBody">
+                <div className="msgMeta">
+                  <span className="msgName">{m.role === "user" ? "You" : "AI"}</span>
+                  <span className="msgTime">
+                    {new Date(m.ts).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
                 </div>
-                {c.chunk_id && <div className="muted small">chunk_id: {c.chunk_id}</div>}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+
+                <div className={`bubble ${m.role}`}>
+                  {m.content.split("\n").map((line, idx) => (
+                    <span key={idx}>
+                      {line}
+                      <br />
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ))}
+
+          <div ref={endRef} />
+        </div>
+        {loading && (
+        <div className="msgTime">
+          <div className="composerHint">Assistant Thinking…</div>
+        </div>
+      )}
+
+        {/* Composer */}
+        <div className="composerWrap">
+          <div className="composer">
+            <textarea
+              placeholder="Ask anything…"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  sendMessage();
+                }
+              }}
+              
+              rows={1}
+            />
+            <button className="sendBtn"   disabled={loading || input.trim().length < 2}
+            onClick={sendMessage}
+          >
+            {loading ? "Sending..." : "Send"}
+            </button>
+          </div>
+
+          <div className="composerHint">
+            Enter to send • Shift+Enter for newline
+          </div>
+        </div>
+      </main>
     </div>
   );
 }
-
-export default App

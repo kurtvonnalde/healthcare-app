@@ -4,6 +4,9 @@ from app.rag import answer_question
 from app.config import settings
 from app.logging_setup import setup_logging
 from fastapi.middleware.cors import CORSMiddleware
+from app.schemas import ChatRequest, ChatResponse
+from app.rag import answer_chat
+
 
 
 setup_logging()
@@ -14,7 +17,7 @@ app = FastAPI(title=settings.app_name)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173"
+        "https://zealous-river-0d94b310f.4.azurestaticapps.net"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -30,3 +33,8 @@ def health():
 async def ask(req: AskRequest):
     result = await answer_question(req.question, req.top_k)
     return result
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(req: ChatRequest):
+    return await answer_chat(req.messages, req.top_k)
